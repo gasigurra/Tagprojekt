@@ -27,7 +27,7 @@ def build_train_chunk_query(time_from, time_to):
         <INCLUDE>AdvertisedTimeAtLocation</INCLUDE>
         <INCLUDE>TimeAtLocation</INCLUDE>
         <INCLUDE>Canceled</INCLUDE>
-        <INCLUDE>InformationOwner</INCLUDE>
+        <INCLUDE>TrainOwner</INCLUDE>
         <INCLUDE>ProductInformation</INCLUDE>
       </QUERY>
     </REQUEST>
@@ -76,7 +76,7 @@ def fetch_and_save_trains(hours_offset):
         actual_str = train.get('TimeAtLocation')
         canceled = train.get('Canceled', False)
         
-        operator = train.get('InformationOwner', 'Okänd')
+        operator = train.get('TrainOwner', 'Okänd')
         prod = train.get('ProductInformation')
         train_type = prod[0] if prod and not str(prod[0]).isdigit() else 'Okänd'
         

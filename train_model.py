@@ -1,7 +1,7 @@
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_absolute_error
+from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
@@ -49,9 +49,10 @@ def train_and_evaluate_model():
     model.fit(X_train, y_train)
 
     predictions = model.predict(X_test)
+    
     mae = mean_absolute_error(y_test, predictions)
-
-    print(f"✅ MODELLENS MAE: {mae:.2f} minuter")
+    mse = mean_squared_error(y_test, predictions)
+    print(f"✅ MODELLENS MSE: {mse:.2f} | MAE: {mae:.2f} minuter")
     return model
 
 if __name__ == "__main__":
