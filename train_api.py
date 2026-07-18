@@ -100,9 +100,9 @@ def fetch_and_save_trains(hours_offset):
     print(f"  -> Sparade {inserted} nya tåg.")
 
 def fetch_messages():
-    """Hämtar fel och incidenter. Kollar 7 dagar bakåt."""
+    """Hämtar fel och incidenter. Kollar 14 dagar bakåt."""
     print("Hämtar rikstäckande signalfel och banarbeten...")
-    time_from = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S")
+    time_from = (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%S")
     
     query = f"""
     <REQUEST>
@@ -141,8 +141,8 @@ if __name__ == '__main__':
     if not API_KEY:
         print("Saknar API-nyckel i .env!")
     else:
-        # Tanka ner 24 timmar i 4-timmars-chunks för hela Sverige
-        for offset in range(24, 0, -4):
+        # Tanka ner 14 dagar i 4-timmars-chunks för hela Sverige
+        for offset in range(336, 0, -4):
             fetch_and_save_trains(offset)
             time.sleep(0.2)  # SÄKERHETSGRÄNS: Pausar mellan chunks
         

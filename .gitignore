@@ -1,1 +1,8 @@
+
+# Blockera databasen och tunga filer
+train_predictions.db
+
+# Blockera nycklar och virtuell miljö
 .env
+.venv/
+__pycache__/
