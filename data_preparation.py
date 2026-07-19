@@ -36,17 +36,28 @@ def add_incident_flag(df_trains, df_incidents):
     return df_trains
 
 def add_previous_station_delay(df_trains):
-    """Hittar förseningen från samma tåg på förra stationen."""
+    """Hittar förseningen från samma tåg på förra stationen inom samma unika resa."""
     df_sorted = df_trains.sort_values(['train_number', 'scheduled_utc']).copy()
 
-    df_sorted['prev_delay'] = df_sorted.groupby('train_number')['delay_minutes'].shift(1)
-    df_sorted['prev_time'] = df_sorted.groupby('train_number')['scheduled_utc'].shift(1)
+    # 1. Skapa ett unikt rese-ID (t.ex. "924_2026-07-19") genom att kombinera tågnummer och datum
+    df_sorted['trip_id'] = (
+        df_sorted['train_number'].astype(str) + "_" + 
+        df_sorted['scheduled_utc'].dt.date.astype(str)
+    )
 
-    # Om skillnaden mellan stationerna är < 6 timmar godkänner vi det
+    # 2. Gruppera på det unika rese-ID:t istället för bara tågnumret
+    df_sorted['prev_delay'] = df_sorted.groupby('trip_id')['delay_minutes'].shift(1)
+    df_sorted['prev_time'] = df_sorted.groupby('trip_id')['scheduled_utc'].shift(1)
+
+    # 3. Beräkna tidsskillnaden i timmar
     time_diff_hours = (df_sorted['scheduled_utc'] - df_sorted['prev_time']).dt.total_seconds() / 3600
+
+    # 4. Godkänn bara förseningen om det är samma resa OCH stoppavståndet är < 6 timmar.
+    # Första stationen (där prev_delay är NaN) eller rader med >6 timmars hopp får automatiskt 0.
     df_sorted['previous_station_delay'] = df_sorted['prev_delay'].where(time_diff_hours < 6, 0)
 
-    return df_sorted.drop(columns=['prev_delay', 'prev_time'])
+    # Städa bort hjälpkolumnerna
+    return df_sorted.drop(columns=['trip_id', 'prev_delay', 'prev_time'])
 
 def load_and_prepare_data():
     print("Laddar data från databasen...")
@@ -63,7 +74,7 @@ def load_and_prepare_data():
 
     # Tidszonsharmonisering
     df_train['scheduled_utc'] = pd.to_datetime(df_train['scheduled_arrival'], utc=True)
-    df_train['join_hour'] = df_train['scheduled_utc'].dt.floor('h')
+    df_train['join_hour'] = df_train['scheduled_utc'].dt.round('h')
     df_weather['join_hour'] = pd.to_datetime(df_weather['timestamp_hour']).dt.tz_localize('UTC')
 
     print("Beräknar störningsflagga (incident_type)...")

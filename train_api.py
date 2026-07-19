@@ -99,6 +99,8 @@ def fetch_and_save_trains(hours_offset):
     conn.close()
     print(f"  -> Sparade {inserted} nya tåg.")
 
+import json
+
 def fetch_messages():
     """Hämtar fel och incidenter. Kollar 14 dagar bakåt."""
     print("Hämtar rikstäckande signalfel och banarbeten...")
@@ -117,25 +119,63 @@ def fetch_messages():
       </QUERY>
     </REQUEST>
     """
-    response = requests.post(TRAFIKVERKET_URL, data=query, headers={'Content-Type': 'text/xml'})
-    if response.status_code != 200: return
-    try: messages = response.json()['RESPONSE']['RESULT'][0]['TrainMessage']
-    except KeyError: return
     
-    conn = sqlite3.connect(DATABASE_PATH, timeout=15)
-    cursor = conn.cursor()
-    for m in messages:
-        if not m.get('AffectedLocation'): continue
-        for station in m.get('AffectedLocation', []):
-            try:
-                cursor.execute('''
-                    INSERT OR IGNORE INTO track_works 
-                    (incident_id, affected_station, start_time, end_time, severity_level)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (m.get('EventId'), station, m.get('StartDateTime'), m.get('EndDateTime'), m.get('Header')))
-            except sqlite3.Error: pass
-    conn.commit()
-    conn.close()
+    # 1. Hantera nätverksfel och lägg till timeout
+    try:
+        response = requests.post(
+            TRAFIKVERKET_URL, 
+            data=query, 
+            headers={'Content-Type': 'text/xml'},
+            timeout=30  # Förhindrar att programmet hänger sig
+        )
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Nätverksfel vid anrop till Trafikverket (TrainMessage): {e}")
+        raise  # Kasta vidare felet så att run_all.py märker att skriptet kraschade!
+
+    # 2. Hantera HTTP-statusfel
+    if response.status_code != 200:
+        print(f"❌ HTTP-fel från Trafikverket ({response.status_code}):")
+        print(response.text[:1000])  # Skriv ut API:ets felmeddelande
+        response.raise_for_status()  # Kastar en HTTPError
+
+    # 3. Hantera JSON- och strukturfel
+    try:
+        data = response.json()
+        messages = data['RESPONSE']['RESULT'][0]['TrainMessage']
+    except (KeyError, ValueError) as e:
+        print(f"❌ Kunde inte tolka svaret från Trafikverket ({type(e).__name__}): {e}")
+        # Om Trafikverket skickat ett felmeddelande i JSON-format, skriv ut det:
+        print("Svarsinnehåll:", json.dumps(response.json(), indent=2, ensure_ascii=False)[:1500] if response.text else "Tomt svar")
+        raise RuntimeError("Felaktig svarsstruktur från Trafikverkets API (TrainMessage).") from e
+    
+    # 4. Hantera databasinfogning säkert med context manager
+    inserted = 0
+    try:
+        # Med 'with' stängs databasen automatiskt, och ändringar görs bara om inget kraschar
+        with sqlite3.connect(DATABASE_PATH, timeout=15) as conn:
+            cursor = conn.cursor()
+            for m in messages:
+                if not m.get('AffectedLocation'): 
+                    continue
+                for station in m['AffectedLocation']:
+                    cursor.execute('''
+                        INSERT OR IGNORE INTO track_works 
+                        (incident_id, affected_station, start_time, end_time, severity_level)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', (
+                        m.get('EventId'), 
+                        station, 
+                        m.get('StartDateTime'), 
+                        m.get('EndDateTime'), 
+                        m.get('Header')
+                    ))
+                    if cursor.rowcount > 0:
+                        inserted += 1
+    except sqlite3.Error as e:
+        print(f"❌ Databasfel vid sparande av banarbeten: {e}")
+        raise  # Kasta felet vidare
+        
+    print(f"  -> Sparade {inserted} nya störningar/banarbeten.")
 
 if __name__ == '__main__':
     if not API_KEY:

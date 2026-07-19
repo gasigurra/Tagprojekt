@@ -46,10 +46,16 @@ def main():
         "train_api.py", "4. Hämtar tåg & trafikstörningar från Trafikverket"
     )
 
+    # --- HÄR ÄR DEN NYA RADEN SOM KÖR MODELLEN SYNLTIGT ---
+    run_script(
+        "train_model.py", "5. Tränar och utvärderar AI-modellen (MSE & MAE)"
+    )
+    # ------------------------------------------------------
+
     total_time = round(time.time() - total_start, 1)
     print("\n--------------------------------------------------")
     print(f"🎉 All data är nedladdad och sparad! (Totaltid: {total_time}s)")
-    print("🚀 STEG 3: Startar AI-modellen och Streamlit-hemsidan...")
+    print("🚀 STEG 3: Startar Streamlit-hemsidan...")
     print("--------------------------------------------------\n")
 
     # STEG 3: Appen (Startar absolut sist!)
