@@ -39,7 +39,7 @@ def add_previous_station_delay(df_trains):
     """Hittar förseningen från samma tåg på förra stationen inom samma unika resa."""
     df_sorted = df_trains.sort_values(['train_number', 'scheduled_utc']).copy()
 
-    # 1. Skapa ett unikt rese-ID (t.ex. "924_2026-07-19") genom att kombinera tågnummer och datum
+    # 1. Skapa ett unikt rese-ID genom att kombinera tågnummer och datum
     df_sorted['trip_id'] = (
         df_sorted['train_number'].astype(str) + "_" + 
         df_sorted['scheduled_utc'].dt.date.astype(str)
@@ -52,16 +52,34 @@ def add_previous_station_delay(df_trains):
     # 3. Beräkna tidsskillnaden i timmar
     time_diff_hours = (df_sorted['scheduled_utc'] - df_sorted['prev_time']).dt.total_seconds() / 3600
 
-    # 4. Godkänn bara förseningen om det är samma resa OCH stoppavståndet är < 6 timmar.
-    # Första stationen (där prev_delay är NaN) eller rader med >6 timmars hopp får automatiskt 0.
+    # 4. Godkänn bara förseningen om det är samma resa OCH stoppavståndet är < 6 timmar
     df_sorted['previous_station_delay'] = df_sorted['prev_delay'].where(time_diff_hours < 6, 0)
 
-    # Städa bort hjälpkolumnerna
     return df_sorted.drop(columns=['trip_id', 'prev_delay', 'prev_time'])
+
+def add_accurate_traffic_density(df_trains):
+    """Beräknar trafiktäthet på en komplett tidslinje utan blinda fläckar."""
+    df = df_trains.copy()
+    
+    # Sortera efter station och tidsstämpel för att ha en garanterad ordning
+    df = df.sort_values(by=['station_signature', 'scheduled_utc']).reset_index(drop=True)
+    
+    # 💡 LÖSNINGEN: Genom att använda .reset_index(drop=True) stannar vi helt 
+    # i Pandas-ekosystemet och NumPy blandas aldrig in!
+    rolling_counts = (
+        df.set_index('scheduled_utc')
+        .groupby('station_signature', sort=False)['train_number']
+        .rolling('15min', center=True).count()
+        .reset_index(drop=True)
+    )
+    
+    # Nu är det garanterat en ren Pandas Series med 100% kompatibla funktioner
+    df['traffic_density'] = (rolling_counts - 1).clip(lower=0).fillna(0).astype(int)
+    
+    return df
 
 def load_and_prepare_data():
     print("Laddar data från databasen...")
-    # timeout=15 minskar risken för krasch ifall skrapan körs i bakgrunden
     conn = sqlite3.connect(DATABASE_PATH, timeout=15)
     df_train = pd.read_sql_query("SELECT * FROM train_observations", conn)
     df_weather = pd.read_sql_query("SELECT * FROM weather_observations", conn)
@@ -83,12 +101,15 @@ def load_and_prepare_data():
     print("Beräknar kedjeeffekt (previous_station_delay)...")
     df_train = add_previous_station_delay(df_train)
 
+    print("Beräknar exakt trafiktäthet (traffic_density) utan blinda skarvar...")
+    df_train = add_accurate_traffic_density(df_train)
+
     print("Slår ihop tabellerna...")
     df_merged = pd.merge(df_train, df_weather, how='left', on=['station_signature', 'join_hour'])
 
-    # Städar upp
+    # Städar upp och förhindrar geografiskt väderläckage genom att gruppera ffill per station
     df_merged = df_merged.sort_values(by=['station_signature', 'join_hour'])
-    df_merged['snow_depth'] = df_merged['snow_depth'].ffill().fillna(0.0)
+    df_merged['snow_depth'] = df_merged.groupby('station_signature')['snow_depth'].ffill().fillna(0.0)
     
     df_merged['traffic_density'] = df_merged['traffic_density'].fillna(0)
     df_merged['is_single_track'] = df_merged['is_single_track'].fillna(0)
