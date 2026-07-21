@@ -1,12 +1,11 @@
 import pandas as pd
-from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 
-from data_preparation import load_and_prepare_data
+from data_preparation import load_and_prepare_split_data
 
 NUMERIC_FEATURES = [
     'temperature', 'wind_speed', 'precipitation', 'snow_depth',
@@ -14,31 +13,24 @@ NUMERIC_FEATURES = [
     'traffic_density', 'is_single_track', 'previous_station_delay',
 ]
 
-CATEGORICAL_FEATURES = ['train_type', 'operator', 'incident_type']
+CATEGORICAL_FEATURES = ['station_signature', 'train_type', 'operator', 'incident_type']
 
 def train_and_evaluate_model():
-    print("1. Laddar och tvättar data...")
-    df = load_and_prepare_data()
+    print("1. Laddar och gör en vattentät kronologisk split...")
+    df_train, df_test = load_and_prepare_split_data(split_ratio=0.8)
 
-    if df is None or len(df) == 0:
+    if df_train is None or df_test is None:
         return None
 
-    # --- 1. Sortera kronologiskt för att undvika dataläckage ---
-    df = df.sort_values(by='join_hour').reset_index(drop=True)
-    # -----------------------------------------------------------
+    for df in [df_train, df_test]:
+        df['hour_of_day'] = df['scheduled_utc'].dt.hour
+        df['day_of_week'] = df['scheduled_utc'].dt.weekday
 
-    df['hour_of_day'] = df['join_hour'].dt.hour
-    df['day_of_week'] = df['join_hour'].dt.weekday
-    df = df.drop(columns=['join_hour'])
+    y_train = df_train['delay_minutes']
+    X_train = df_train[NUMERIC_FEATURES + CATEGORICAL_FEATURES]
 
-    y = df['delay_minutes']
-    X = df[NUMERIC_FEATURES + CATEGORICAL_FEATURES]
-
-    # --- 2. Kronologisk uppdelning (80 % träningsdata, 20 % testdata) ---
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, shuffle=False
-    )
-    # ------------------------------------------------------------------
+    y_test = df_test['delay_minutes']
+    X_test = df_test[NUMERIC_FEATURES + CATEGORICAL_FEATURES]
 
     preprocessor = ColumnTransformer(
         transformers=[
@@ -47,24 +39,21 @@ def train_and_evaluate_model():
         remainder='passthrough',
     )
 
-    # Vi behåller alla processorkärnor igång med n_jobs=-1 för snabbare träning
     model = Pipeline(steps=[
         ('preprocessor', preprocessor),
         ('regressor', RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)),
     ])
 
-    print("2. Tränar modellen på historisk data (de första 80 %)...")
+    print("2. Tränar modellen enbart på träningsdatan...")
     model.fit(X_train, y_train)
 
-    # --- 3. Beräkna och skriv ut BÅDE MSE och MAE på okänd testdata ---
+    print("3. Utvärderar på den helt oberoende testdatan...")
     predictions = model.predict(X_test)
     
     mae = mean_absolute_error(y_test, predictions)
     mse = mean_squared_error(y_test, predictions)
-    print(f"✅ MODELLENS MSE: {mse:.2f} | MAE: {mae:.2f} minuter (på okänd testdata)")
-    # ------------------------------------------------------------------
+    print(f"\n✅ MODELLENS MSE: {mse:.2f} | MAE: {mae:.2f} minuter")
 
-    # Returnerar modellen tränad enbart på 80 % av datan
     return model
 
 if __name__ == "__main__":
