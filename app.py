@@ -2,30 +2,17 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 
-from train_model import train_and_evaluate_model
+from train_model import load_or_train_model
+from feature_engineering import (
+    get_join_hour,
+    check_incident_type_live,
+    compute_traffic_density_live,
+    compute_previous_station_delay_live,
+)
 
 @st.cache_resource
 def get_model():
-    return train_and_evaluate_model()
-
-def check_has_incident(conn, station_signature, arrival_time_utc):
-    """Kollar vilken olycka (text) som pågick live vid stationen."""
-    df_incidents = pd.read_sql_query(
-        "SELECT * FROM track_works WHERE affected_station = ?", conn, params=(station_signature,)
-    )
-    if df_incidents.empty: 
-        return "Ingen"
-
-    df_incidents['start_time'] = pd.to_datetime(df_incidents['start_time'], utc=True)
-    df_incidents['end_time'] = pd.to_datetime(df_incidents['end_time'], utc=True)
-
-    active = df_incidents[
-        (df_incidents['start_time'] <= arrival_time_utc) & 
-        (df_incidents['end_time'].isna() | (df_incidents['end_time'] >= arrival_time_utc))
-    ]
-    if not active.empty:
-        return active['severity_level'].iloc[0]
-    return "Ingen"
+    return load_or_train_model()
 
 model = get_model()
 
@@ -59,7 +46,10 @@ with tab1:
 
                     st.info(f"**Tåg {train_no} (Station: {station})**")
 
-                    join_hour = scheduled_utc.floor('h')
+                    # join_hour golvas till timmen (samma regel som träningen
+                    # använder via feature_engineering.get_join_hour) - se
+                    # den funktionen för varför golv och inte närmaste timme.
+                    join_hour = get_join_hour(scheduled_utc)
                     weather_df = pd.read_sql_query(
                         "SELECT * FROM weather_observations WHERE station_signature = ?", 
                         conn, params=(station,)
@@ -72,6 +62,7 @@ with tab1:
                         match = pd.DataFrame()
 
                     if match.empty:
+                        st.warning("⚠️ Ingen vädermätning hittades för denna timme - använder schablonvärden, prediktionen kan vara mindre träffsäker.")
                         temp, wind, precip, snow = 15.0, 2.0, 0.0, 0.0
                     else:
                         temp = match['temperature'].iloc[0]
@@ -79,13 +70,20 @@ with tab1:
                         precip = match['precipitation'].iloc[0]
                         snow = match['snow_depth'].iloc[0]
 
-                    traffic_density = train_df['traffic_density'].iloc[0]
+                    # traffic_density och previous_station_delay räknas LIVE
+                    # med exakt samma definitioner som träningspipelinen
+                    # använder (feature_engineering.py), istället för att
+                    # läsas direkt ur databasen: den kolumnen för
+                    # traffic_density kunde vara inaktuell/annorlunda
+                    # definierad, och previous_station_delay skrevs aldrig
+                    # dit av något skript och var därför alltid NULL.
+                    traffic_density = compute_traffic_density_live(conn, station, scheduled_utc)
+                    previous_station_delay = compute_previous_station_delay_live(conn, train_no, scheduled_utc)
                     is_single_track = train_df['is_single_track'].iloc[0]
                     train_type = train_df['train_type'].iloc[0] or "Okänt"
                     operator = train_df['operator'].iloc[0] or "Okänt"
-                    previous_station_delay = train_df['previous_station_delay'].iloc[0] or 0
-                    
-                    incident_type = check_has_incident(conn, station, scheduled_utc)
+
+                    incident_type = check_incident_type_live(conn, station, scheduled_utc)
                     if incident_type != "Ingen":
                         st.warning(f"⚠️ Aktiv störning ({incident_type})")
 

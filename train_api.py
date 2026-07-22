@@ -93,20 +93,28 @@ def fetch_messages():
     print("Hämtar rikstäckande störningar (Situation) från Trafikverket...")
     time_from = (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%S")
 
+    # OBS: bytt StartDateTime/EndDateTime -> StartTime/EndTime nedan.
+    # Trafikverkets Deviation-objekt dokumenteras med StartTime/EndTime, inte
+    # StartDateTime/EndDateTime - det senare fanns bara inte som fält, vilket
+    # är den mest sannolika orsaken till 400-felet. INTE 100% verifierat mot
+    # ett live-svar än (jag har inte nätverksåtkomst till Trafikverkets API
+    # härifrån) - om det fortfarande blir 400, kolla utskriften från
+    # response.text (se ändringen ovan) för Trafikverkets exakta felmeddelande,
+    # det talar om precis vilket fält som är fel.
     query = f"""
     <REQUEST>
       <LOGIN authenticationkey="{API_KEY}" />
       <QUERY objecttype="Situation" schemaversion="1.5">
         <FILTER>
-          <GT name="Deviation.StartDateTime" value="{time_from}" />
+          <GT name="Deviation.StartTime" value="{time_from}" />
         </FILTER>
         <INCLUDE>Id</INCLUDE>
         <INCLUDE>Deviation.Id</INCLUDE>
         <INCLUDE>Deviation.Header</INCLUDE>
         <INCLUDE>Deviation.MessageType</INCLUDE>
         <INCLUDE>Deviation.AffectedLocation</INCLUDE>
-        <INCLUDE>Deviation.StartDateTime</INCLUDE>
-        <INCLUDE>Deviation.EndDateTime</INCLUDE>
+        <INCLUDE>Deviation.StartTime</INCLUDE>
+        <INCLUDE>Deviation.EndTime</INCLUDE>
       </QUERY>
     </REQUEST>
     """
@@ -120,6 +128,7 @@ def fetch_messages():
         )
         if response.status_code != 200:
             print(f"⚠️ HTTP-fel ({response.status_code}) vid hämtning av störningar.")
+            print(f"   Svar från Trafikverket: {response.text[:1000]}")
             return
 
         data = response.json()
@@ -151,8 +160,8 @@ def fetch_messages():
                     affected_stations = []
 
                 incident_id = dev.get('Id', sit.get('Id', 'okand'))
-                start_time = dev.get('StartDateTime')
-                end_time = dev.get('EndDateTime')
+                start_time = dev.get('StartTime')
+                end_time = dev.get('EndTime')
                 severity_level = dev.get('MessageType', dev.get('Header', 'Störning'))
 
                 for station in affected_stations:

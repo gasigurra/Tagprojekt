@@ -1,11 +1,17 @@
-    # 1. SORTERA KRONOLOGISKT
+# 1. SORTERA KRONOLOGISKT
 import sqlite3
 import pandas as pd
+
+from feature_engineering import get_incident_type, get_join_hour
 
 DATABASE_PATH = "train_predictions.db"
 
 def add_incident_flag(df_trains, df_incidents):
-    """Matcherar aktiva störningar mot tågets planerade ankomsttid."""
+    """Matcherar aktiva störningar mot tågets planerade ankomsttid.
+
+    Matchningsregeln (get_incident_type) kommer från feature_engineering.py
+    och är EXAKT samma funktion som app.py anropar live via
+    check_incident_type_live - de kan inte längre gå isär av misstag."""
     df_trains = df_trains.copy()
     df_trains['incident_type'] = "Ingen"
 
@@ -22,17 +28,9 @@ def add_incident_flag(df_trains, df_incidents):
             continue
 
         mask = df_trains['station_signature'] == station
-
-        def get_incident_type(arrival_time):
-            active = station_incidents[
-                (station_incidents['start_time'] <= arrival_time) & 
-                (station_incidents['end_time'].isna() | (station_incidents['end_time'] >= arrival_time))
-            ]
-            if not active.empty:
-                return active['severity_level'].iloc[0]
-            return "Ingen"
-
-        df_trains.loc[mask, 'incident_type'] = df_trains.loc[mask, 'scheduled_utc'].apply(get_incident_type)
+        df_trains.loc[mask, 'incident_type'] = df_trains.loc[mask, 'scheduled_utc'].apply(
+            lambda arrival_time: get_incident_type(station_incidents, arrival_time)
+        )
 
     return df_trains
 
@@ -110,7 +108,10 @@ def load_and_prepare_split_data(split_ratio=0.8):
         return None, None
 
     df_train_raw['scheduled_utc'] = pd.to_datetime(df_train_raw['scheduled_arrival'], utc=True)
-    df_train_raw['join_hour'] = df_train_raw['scheduled_utc'].dt.round('h')
+    # get_join_hour golvar till timmen (se feature_engineering.py för varför
+    # det måste vara golv och inte närmaste timme) - samma funktion som
+    # app.py anropar live, så väderuppslaget kan inte längre gå isär.
+    df_train_raw['join_hour'] = get_join_hour(df_train_raw['scheduled_utc'])
     df_weather_raw['join_hour'] = pd.to_datetime(df_weather_raw['timestamp_hour']).dt.tz_localize('UTC')
 
     df_train_raw = df_train_raw.sort_values(by='scheduled_utc').reset_index(drop=True)

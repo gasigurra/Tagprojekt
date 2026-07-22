@@ -2,9 +2,7 @@ import sqlite3
 import os
 
 
-def create_database(confirm_delete=True):
-    db_path = 'train_predictions.db'
-
+def create_database(db_path='train_predictions.db', confirm_delete=True):
     if os.path.exists(db_path):
         if confirm_delete:
             print(f"⚠️  '{db_path}' finns redan och innehåller sannolikt insamlad data.")
@@ -76,6 +74,12 @@ def create_database(confirm_delete=True):
 
     cursor.execute('CREATE INDEX idx_train_time ON train_observations(scheduled_arrival);')
     cursor.execute('CREATE INDEX idx_train_number ON train_observations(train_number);')
+    # Ingen tidigare index täckte station_signature ensamt (UNIQUE-indexet
+    # har train_number som första kolumn, hjälper inte "WHERE
+    # station_signature = ?"-frågor). Behövs av app.py:s live-uppslag
+    # (feature_engineering.compute_traffic_density_live m.fl.) för att slippa
+    # full tabellscan på en tabell som i praktiken växer sig stor.
+    cursor.execute('CREATE INDEX idx_train_station ON train_observations(station_signature, scheduled_arrival);')
     cursor.execute('CREATE INDEX idx_weather_time ON weather_observations(timestamp_hour);')
     cursor.execute('CREATE INDEX idx_trackworks_station ON track_works(affected_station);')
 

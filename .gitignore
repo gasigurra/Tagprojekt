@@ -1,8 +1,12 @@
-
 # Blockera databasen och tunga filer
 train_predictions.db
+
+# Genererade modellartefakter - data-beroende, ska inte checkas in
+model.joblib
+model_metadata.json
 
 # Blockera nycklar och virtuell miljö
 .env
 .venv/
 __pycache__/
+.pytest_cache/
