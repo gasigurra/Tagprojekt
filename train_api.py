@@ -1,3 +1,4 @@
+import hashlib
 import os
 import requests
 import sqlite3
@@ -93,14 +94,11 @@ def fetch_messages():
     print("Hämtar rikstäckande störningar (Situation) från Trafikverket...")
     time_from = (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%S")
 
-    # OBS: bytt StartDateTime/EndDateTime -> StartTime/EndTime nedan.
-    # Trafikverkets Deviation-objekt dokumenteras med StartTime/EndTime, inte
-    # StartDateTime/EndDateTime - det senare fanns bara inte som fält, vilket
-    # är den mest sannolika orsaken till 400-felet. INTE 100% verifierat mot
-    # ett live-svar än (jag har inte nätverksåtkomst till Trafikverkets API
-    # härifrån) - om det fortfarande blir 400, kolla utskriften från
-    # response.text (se ändringen ovan) för Trafikverkets exakta felmeddelande,
-    # det talar om precis vilket fält som är fel.
+    # OBS: både Situation.Id och Deviation.Id har nu bekräftats vara ogiltiga
+    # fält (två separata 400-fel, verifierade mot riktiga svar). Snarare än
+    # att fortsätta gissa fältnamn ett i taget bygger vi ett eget stabilt
+    # ID från Header+StartTime nedan (se hash-koden längre ner) istället för
+    # att be Trafikverket om ett Id-fält alls.
     query = f"""
     <REQUEST>
       <LOGIN authenticationkey="{API_KEY}" />
@@ -108,8 +106,6 @@ def fetch_messages():
         <FILTER>
           <GT name="Deviation.StartTime" value="{time_from}" />
         </FILTER>
-        <INCLUDE>Id</INCLUDE>
-        <INCLUDE>Deviation.Id</INCLUDE>
         <INCLUDE>Deviation.Header</INCLUDE>
         <INCLUDE>Deviation.MessageType</INCLUDE>
         <INCLUDE>Deviation.AffectedLocation</INCLUDE>
@@ -159,10 +155,17 @@ def fetch_messages():
                 else:
                     affected_stations = []
 
-                incident_id = dev.get('Id', sit.get('Id', 'okand'))
                 start_time = dev.get('StartTime')
                 end_time = dev.get('EndTime')
                 severity_level = dev.get('MessageType', dev.get('Header', 'Störning'))
+                header = dev.get('Header', '')
+
+                # Trafikverket ger oss inget användbart Id-fält (se kommentar
+                # vid frågan ovan), så vi bygger ett eget som är STABILT över
+                # upprepade körningar - annars skulle UNIQUE(incident_id,
+                # affected_station) inte kunna deduplicera, och samma
+                # störning skulle sparas som "ny" varje gång pipelinen körs.
+                incident_id = hashlib.md5(f"{header}|{start_time}".encode("utf-8")).hexdigest()[:16]
 
                 for station in affected_stations:
                     try:

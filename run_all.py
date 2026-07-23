@@ -10,7 +10,12 @@ def run_script(script_name, description):
     start_t = time.time()
 
     # Denna rad låser Python: Inget annat händer förrän skriptet är helt färdigt
-    result = subprocess.run([sys.executable, script_name])
+    # -u: ovillkorligt oframskjuten stdout. Utan den kan print()-utskrifter
+    # från skriptet fastna i en buffert och aldrig synas i terminalen förrän
+    # processen avslutas (särskilt vanligt genom nästlade subprocess-anrop
+    # på Windows) - det är därför MSE/MAE/feature-importance-utskriften från
+    # train_model.py kunde se ut att "saknas" trots att koden kör den.
+    result = subprocess.run([sys.executable, "-u", script_name])
 
     if result.returncode != 0:
         print(f"❌ FEL: {script_name} kraschade! Avbryter kedjan.")
@@ -52,10 +57,12 @@ def main():
     # STEG 2b: Rätta trafiktäthet retroaktivt
     # train_api.py sparar alltid 0 i traffic_density (det korrekta värdet
     # kräver att se ALLA tåg vid en station, inklusive de i senare chunkar).
-    # Det här steget skriver tillbaka rätt värde så att app.py:s
-    # liveprediktioner matchar det modellen faktiskt tränas på.
+    # OBS: app.py läser INTE längre denna kolumn - den räknar traffic_density
+    # live via feature_engineering.py, garanterat med samma definition som
+    # träningen. Det här steget håller bara den sparade kolumnen korrekt för
+    # den som vill fråga databasen direkt (manuell analys, dashboards).
     run_script(
-        "update_traffic_density.py", "4b. Räknar om trafiktäthet retroaktivt"
+        "update_traffic_density.py", "4b. Räknar om trafiktäthet retroaktivt (för manuell analys - påverkar inte appens prediktioner)"
     )
 
     total_time = round(time.time() - total_start, 1)
@@ -66,7 +73,7 @@ def main():
 
     # STEG 3: Appen (Startar absolut sist!)
     try:
-        subprocess.run([sys.executable, "-m", "streamlit", "run", "app.py"])
+        subprocess.run([sys.executable, "-u", "-m", "streamlit", "run", "app.py"])
     except KeyboardInterrupt:
         print("\n🛑 Streamlit stängdes ner.")
 
