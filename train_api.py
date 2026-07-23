@@ -90,27 +90,33 @@ def fetch_and_save_trains(hours_offset):
     print(f"  -> Sparade {inserted} nya tåg.")
 
 def fetch_messages():
-    """Hämtar störningar, banarbeten och signalfel från Trafikverkets Situation-objekt."""
-    print("Hämtar rikstäckande störningar (Situation) från Trafikverket...")
+    """Hämtar stationsmeddelanden (banarbete, tågfel, förseningsorsaker osv.)
+    från Trafikverkets TrainStationMessage-objekt.
+
+    HISTORIK: det här hette tidigare Situation (fel domän - i praktiken ett
+    vägtrafikobjekt), sedan TrainMessage (objektet existerar inte längre,
+    bytt namn/utgått). TrainStationMessage är det nuvarande, korrekta
+    objektet - verifierat direkt mot Trafikverkets egen API-konsol/
+    datamodell, inte gissat. Fälten är dessutom PLATTA (inget nästlat
+    Deviation-objekt) och LocationCode är EN station per meddelande, inte
+    en lista - enklare att parsa än det gamla AffectedLocation-fältet.
+    """
+    print("Hämtar rikstäckande stationsmeddelanden (TrainStationMessage) från Trafikverket...")
     time_from = (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%S")
 
-    # OBS: både Situation.Id och Deviation.Id har nu bekräftats vara ogiltiga
-    # fält (två separata 400-fel, verifierade mot riktiga svar). Snarare än
-    # att fortsätta gissa fältnamn ett i taget bygger vi ett eget stabilt
-    # ID från Header+StartTime nedan (se hash-koden längre ner) istället för
-    # att be Trafikverket om ett Id-fält alls.
     query = f"""
     <REQUEST>
       <LOGIN authenticationkey="{API_KEY}" />
-      <QUERY objecttype="Situation" schemaversion="1.5">
+      <QUERY objecttype="TrainStationMessage" schemaversion="1">
         <FILTER>
-          <GT name="Deviation.StartTime" value="{time_from}" />
+          <GT name="StartDateTime" value="{time_from}" />
         </FILTER>
-        <INCLUDE>Deviation.Header</INCLUDE>
-        <INCLUDE>Deviation.MessageType</INCLUDE>
-        <INCLUDE>Deviation.AffectedLocation</INCLUDE>
-        <INCLUDE>Deviation.StartTime</INCLUDE>
-        <INCLUDE>Deviation.EndTime</INCLUDE>
+        <INCLUDE>Id</INCLUDE>
+        <INCLUDE>LocationCode</INCLUDE>
+        <INCLUDE>FreeText</INCLUDE>
+        <INCLUDE>Status</INCLUDE>
+        <INCLUDE>StartDateTime</INCLUDE>
+        <INCLUDE>EndDateTime</INCLUDE>
       </QUERY>
     </REQUEST>
     """
@@ -128,7 +134,7 @@ def fetch_messages():
             return
 
         data = response.json()
-        situations = data.get('RESPONSE', {}).get('RESULT', [{}])[0].get('Situation', [])
+        messages = data.get('RESPONSE', {}).get('RESULT', [{}])[0].get('TrainStationMessage', [])
 
     except Exception as e:
         print(f"⚠️ Kunde inte tolka störningar: {e}")
@@ -138,46 +144,34 @@ def fetch_messages():
     with sqlite3.connect(DATABASE_PATH, timeout=15) as conn:
         cursor = conn.cursor()
 
-        for sit in situations:
-            deviations = sit.get('Deviation', [])
-            if isinstance(deviations, dict):
-                deviations = [deviations]
+        for msg in messages:
+            station = msg.get('LocationCode')
+            if not station:
+                continue
 
-            for dev in deviations:
-                affected_raw = dev.get('AffectedLocation', [])
-                if isinstance(affected_raw, str):
-                    affected_stations = [affected_raw]
-                elif isinstance(affected_raw, list):
-                    affected_stations = [
-                        loc.get('LocationSignature', loc) if isinstance(loc, dict) else loc 
-                        for loc in affected_raw
-                    ]
-                else:
-                    affected_stations = []
+            start_time = msg.get('StartDateTime')
+            end_time = msg.get('EndDateTime')
+            severity_level = msg.get('Status') or 'Störning'
+            free_text = msg.get('FreeText', '')
 
-                start_time = dev.get('StartTime')
-                end_time = dev.get('EndTime')
-                severity_level = dev.get('MessageType', dev.get('Header', 'Störning'))
-                header = dev.get('Header', '')
+            # Id är ett riktigt fält här (till skillnad från de tidigare
+            # objekttyperna vi provade) - använd det direkt. Faller bara
+            # tillbaka på ett eget stabilt hash-ID om Trafikverket
+            # undantagsvis inte skickar med Id för en post.
+            incident_id = msg.get('Id') or hashlib.md5(
+                f"{free_text}|{start_time}".encode("utf-8")
+            ).hexdigest()[:16]
 
-                # Trafikverket ger oss inget användbart Id-fält (se kommentar
-                # vid frågan ovan), så vi bygger ett eget som är STABILT över
-                # upprepade körningar - annars skulle UNIQUE(incident_id,
-                # affected_station) inte kunna deduplicera, och samma
-                # störning skulle sparas som "ny" varje gång pipelinen körs.
-                incident_id = hashlib.md5(f"{header}|{start_time}".encode("utf-8")).hexdigest()[:16]
-
-                for station in affected_stations:
-                    try:
-                        cursor.execute('''
-                            INSERT OR IGNORE INTO track_works
-                            (incident_id, affected_station, start_time, end_time, severity_level)
-                            VALUES (?, ?, ?, ?, ?)
-                        ''', (incident_id, station, start_time, end_time, severity_level))
-                        if cursor.rowcount > 0:
-                            inserted += 1
-                    except sqlite3.Error:
-                        pass
+            try:
+                cursor.execute('''
+                    INSERT OR IGNORE INTO track_works
+                    (incident_id, affected_station, start_time, end_time, severity_level)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (incident_id, station, start_time, end_time, severity_level))
+                if cursor.rowcount > 0:
+                    inserted += 1
+            except sqlite3.Error:
+                pass
 
     print(f"  -> Sparade {inserted} nya störningar i databasen.")
 
